@@ -16,6 +16,7 @@ import {Screens} from '@constants';
 import {LOGIN_TYPE} from '@constants/sso';
 import {usePreventDoubleTap} from '@hooks/utils';
 import {navigateToScreen} from '@screens/navigation';
+import LoginCredentialsStore from '@store/login_credentials_store';
 import {getFullErrorMessage, getServerError, isErrorWithMessage, isServerError} from '@utils/errors';
 import {logError} from '@utils/log';
 import {changeOpacity, makeStyleSheetFromTheme} from '@utils/theme';
@@ -136,7 +137,8 @@ const LoginForm = ({
     }, [extra, launchError, launchType, serverUrl]);
 
     const goToMfa = useCallback(() => {
-        navigateToScreen(Screens.MFA, {loginId, extra, isModal, password, config, serverDisplayName, license, serverUrl, theme});
+        LoginCredentialsStore.setCredentials({loginId, password});
+        navigateToScreen(Screens.MFA, {extra, isModal, config, serverDisplayName, license, serverUrl, theme});
     }, [config, extra, isModal, license, loginId, password, serverDisplayName, serverUrl, theme]);
 
     const checkUserLoginType = useCallback(async () => {

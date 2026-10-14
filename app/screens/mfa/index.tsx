@@ -1,7 +1,7 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import React, {useCallback, useState} from 'react';
+import React, {useCallback, useEffect, useState} from 'react';
 import {useIntl} from 'react-intl';
 import {Keyboard, Platform, View} from 'react-native';
 import {KeyboardAwareScrollView} from 'react-native-keyboard-controller';
@@ -18,6 +18,7 @@ import {useScreenTransitionAnimation} from '@hooks/screen_transition_animation';
 import {usePreventDoubleTap} from '@hooks/utils';
 import Background from '@screens/background';
 import {navigateBack, navigateToScreen} from '@screens/navigation';
+import LoginCredentialsStore from '@store/login_credentials_store';
 import {getErrorMessage} from '@utils/errors';
 import {changeOpacity, makeStyleSheetFromTheme} from '@utils/theme';
 import {typography} from '@utils/typography';
@@ -32,8 +33,6 @@ export type MFAProps = {
     launchError: boolean;
     launchType: LaunchType;
     license: Partial<ClientLicense>;
-    loginId: string;
-    password: string;
     serverDisplayName: string;
     serverUrl: string;
     theme: Theme;
@@ -84,14 +83,19 @@ const getStyleSheet = makeStyleSheetFromTheme((theme: Theme) => ({
 
 const AnimatedSafeArea = Animated.createAnimatedComponent(SafeAreaView);
 
-const MFA = ({config, extra, launchError, launchType, license, loginId, password, serverDisplayName, serverUrl, theme}: MFAProps) => {
+const MFA = ({config, extra, launchError, launchType, license, serverDisplayName, serverUrl, theme}: MFAProps) => {
     const intl = useIntl();
+    const [credentials] = useState(() => LoginCredentialsStore.getCredentials());
     const [token, setToken] = useState<string>('');
     const [error, setError] = useState<string>('');
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const {formatMessage} = useIntl();
 
     const styles = getStyleSheet(theme);
+
+    useEffect(() => {
+        return () => LoginCredentialsStore.clearCredentials();
+    }, []);
 
     const handleInput = useCallback((userToken: string) => {
         setToken(userToken);
@@ -114,7 +118,12 @@ const MFA = ({config, extra, launchError, launchType, license, loginId, password
             );
             return;
         }
+        if (!credentials) {
+            navigateBack();
+            return;
+        }
         setIsLoading(true);
+        const {loginId, password} = credentials;
         const result: LoginActionResponse = await login(serverUrl, {loginId, password, mfaToken: token, config, license, serverDisplayName});
         setIsLoading(false);
         if (result?.error && result.failed) {
@@ -122,7 +131,7 @@ const MFA = ({config, extra, launchError, launchType, license, loginId, password
             return;
         }
         goToHome(result.error);
-    }, [config, formatMessage, goToHome, intl, license, loginId, password, serverDisplayName, serverUrl, token]));
+    }, [config, credentials, formatMessage, goToHome, intl, license, serverDisplayName, serverUrl, token]));
 
     const animatedStyles = useScreenTransitionAnimation();
 
