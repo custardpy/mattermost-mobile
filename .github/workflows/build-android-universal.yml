@@ -3,6 +3,11 @@ name: build-android-universal
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (leave empty to auto-increment patched-v<major>.<minor>.N)"
+        required: false
+        type: string
   push:
     branches:
       - main
@@ -18,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   TERM: xterm
@@ -158,3 +163,38 @@ jobs:
           fi
           echo "Bundled CA fingerprint verified: $ACTUAL"
           sha256sum app-universal-release.apk
+
+      - name: ci/compute-release-tag
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            VERSION_NAME=$(grep -oP 'versionName "\K[^"]+' android/app/build.gradle | head -1)
+            MAJOR_MINOR=$(echo "$VERSION_NAME" | cut -d. -f1,2)
+            PREFIX="patched-v${MAJOR_MINOR}."
+            HIGHEST=$(git ls-remote --tags origin "refs/tags/${PREFIX}*" | grep -oP "${PREFIX}\K[0-9]+" | sort -n | tail -1)
+            TAG="${PREFIX}$(( ${HIGHEST:--1} + 1 ))"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $TAG"
+
+      - name: ci/publish-github-release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "$TAG" \
+            --notes "Patched Mattermost Android build (app-scoped Russian Trusted Root CA).
+
+          Bundles the Russian Trusted Root CA and patches @mattermost/react-native-network-client so the native trust manager additionally trusts certificates under assets/trusted-cas — no system/user CA install required.
+
+          Signed with the debug keystore; uninstall any differently-signed build first." \
+            android/app/build/outputs/apk/release/app-universal-release.apk \
+            android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk \
+            android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
+          echo "Published $TAG"
