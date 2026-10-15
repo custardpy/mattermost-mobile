@@ -31,6 +31,12 @@ jobs:
       - name: ci/checkout-repo
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
+      - name: ci/verify-source-ca
+        shell: bash
+        run: |
+          ls -la android/app/src/main/res/raw/
+          openssl x509 -in android/app/src/main/res/raw/russian_trusted_root_ca.pem -noout -subject -fingerprint -sha256
+
       - name: ci/prepare-node-deps
         uses: ./.github/actions/prepare-node-deps
 
@@ -49,6 +55,7 @@ jobs:
         run: |
           mkdir -p android/app/src/main/res/raw
           cp assets/sounds/* android/app/src/main/res/raw/
+          ls -la android/app/src/main/res/raw/
 
       - name: ci/free-disk-space
         shell: bash
@@ -79,17 +86,7 @@ jobs:
             -PuniversalApk=true \
             -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
 
-      - name: ci/verify-bundled-ca
-        shell: bash
-        working-directory: ./android/app/build/outputs/apk/release
-        run: |
-          ls -lh
-          echo "::group::bundled certificate check"
-          unzip -l app-universal-release.apk | grep -i "russian_trusted_root_ca" || (echo "CA not found in APK" && exit 1)
-          echo "::endgroup::"
-          sha256sum app-universal-release.apk
-
-      - name: ci/upload-universal-apk
+      - name: ci/upload-apks
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mattermost-android-universal-${{ github.run_number }}
@@ -98,3 +95,39 @@ jobs:
             android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
             android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
           if-no-files-found: error
+
+      - name: ci/verify-bundled-ca
+        shell: bash
+        working-directory: ./android/app/build/outputs/apk/release
+        run: |
+          ls -lh
+          python3 - <<'PY'
+          import zipfile, sys
+          apk = 'app-universal-release.apk'
+          z = zipfile.ZipFile(apk)
+          names = z.namelist()
+          raw = [n for n in names if '/raw/' in n]
+          certs = [n for n in names if n.lower().endswith(('.pem', '.crt', '.cer', '.der'))]
+          print('raw entries:', raw)
+          print('cert-like entries:', certs)
+          target = None
+          for n in certs:
+              if b'BEGIN CERTIFICATE' in z.read(n):
+                  target = n
+                  break
+          if target is None:
+              print('ERROR: bundled certificate not found in APK')
+              sys.exit(1)
+          with open('/tmp/bundled_ca.pem', 'wb') as f:
+              f.write(z.read(target))
+          print('extracted certificate from:', target)
+          PY
+          openssl x509 -in /tmp/bundled_ca.pem -noout -subject -fingerprint -sha256
+          EXPECTED="D2:6D:2D:02:31:B7:C3:9F:92:CC:73:85:12:BA:54:10:35:19:E4:40:5D:68:B5:BD:70:3E:97:88:CA:8E:CF:31"
+          ACTUAL=$(openssl x509 -in /tmp/bundled_ca.pem -noout -fingerprint -sha256 | sed 's/^[^=]*=//')
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "ERROR: fingerprint mismatch: $ACTUAL"
+            exit 1
+          fi
+          echo "Bundled CA fingerprint verified: $ACTUAL"
+          sha256sum app-universal-release.apk
