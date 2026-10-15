@@ -63,11 +63,22 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
           sudo docker image prune --all --force || true
 
-      - name: ci/accept-android-sdk-licenses
+      - name: ci/install-android-sdk-components
         shell: bash
         run: |
           SDKMGR="$(command -v sdkmanager || echo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager")"
           yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          for pkg in "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"; do
+            installed=""
+            for attempt in 1 2 3 4 5; do
+              echo "::group::sdkmanager $pkg (attempt $attempt)"
+              if "$SDKMGR" "$pkg"; then installed=1; echo "::endgroup::"; break; fi
+              echo "::endgroup::"
+              sleep 15
+            done
+            if [ -z "$installed" ]; then echo "Failed to install $pkg"; exit 1; fi
+          done
+          ls -la "${ANDROID_HOME}/ndk" || true
 
       - name: ci/cache-gradle-dependencies
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
