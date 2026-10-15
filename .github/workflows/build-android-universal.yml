@@ -9,6 +9,8 @@ on:
     paths:
       - "android/app/src/main/res/raw/**"
       - "android/app/src/main/res/xml/network_security_config.xml"
+      - "android/app/src/main/assets/trusted-cas/**"
+      - "patches/**"
       - ".github/workflows/build-android-universal.yml"
 
 concurrency:
@@ -36,9 +38,21 @@ jobs:
         run: |
           ls -la android/app/src/main/res/raw/
           openssl x509 -in android/app/src/main/res/raw/russian_trusted_root_ca.pem -noout -subject -fingerprint -sha256
+          ls -la android/app/src/main/assets/trusted-cas/
+          openssl x509 -in android/app/src/main/assets/trusted-cas/russian_trusted_root_ca.pem -noout -subject -fingerprint -sha256
 
       - name: ci/prepare-node-deps
         uses: ./.github/actions/prepare-node-deps
+
+      - name: ci/verify-library-patch
+        shell: bash
+        run: |
+          TM="node_modules/@mattermost/react-native-network-client/android/src/main/java/com/mattermost/networkclient/helpers/TrustManagerHelper.kt"
+          ls -la "$TM"
+          grep -q "buildBundledTrustManager" "$TM" || { echo "ERROR: TrustManagerHelper patch not applied"; exit 1; }
+          grep -q "CompositeTrustManager" "$TM" || { echo "ERROR: CompositeTrustManager missing"; exit 1; }
+          grep -q "buildTrustManager(context)" node_modules/@mattermost/react-native-network-client/android/src/main/java/com/mattermost/networkclient/NetworkClient.kt || { echo "ERROR: NetworkClient patch not applied"; exit 1; }
+          echo "Library patch verified"
 
       - name: ci/setup-java
         uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5.3.0
@@ -121,17 +135,19 @@ jobs:
           certs = [n for n in names if n.lower().endswith(('.pem', '.crt', '.cer', '.der'))]
           print('raw entries:', raw)
           print('cert-like entries:', certs)
-          target = None
-          for n in certs:
-              if b'BEGIN CERTIFICATE' in z.read(n):
-                  target = n
-                  break
-          if target is None:
-              print('ERROR: bundled certificate not found in APK')
+          asset = 'assets/trusted-cas/russian_trusted_root_ca.pem'
+          if asset not in names:
+              print('ERROR: bundled trust anchor asset missing from APK:', asset)
               sys.exit(1)
           with open('/tmp/bundled_ca.pem', 'wb') as f:
-              f.write(z.read(target))
-          print('extracted certificate from:', target)
+              f.write(z.read(asset))
+          print('extracted certificate from:', asset)
+          dex = b''.join(z.read(n) for n in names if n.endswith('.dex'))
+          for token in (b'trusted-cas', b'buildBundledTrustManager', b'CompositeTrustManager'):
+              if token not in dex:
+                  print('ERROR: patched code token missing from dex:', token)
+                  sys.exit(1)
+          print('patched trust-manager code present in dex')
           PY
           openssl x509 -in /tmp/bundled_ca.pem -noout -subject -fingerprint -sha256
           EXPECTED="D2:6D:2D:02:31:B7:C3:9F:92:CC:73:85:12:BA:54:10:35:19:E4:40:5D:68:B5:BD:70:3E:97:88:CA:8E:CF:31"

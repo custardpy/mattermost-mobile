@@ -1,0 +1,143 @@
+diff --git a/node_modules/@mattermost/react-native-network-client/android/src/main/java/com/mattermost/networkclient/NetworkClient.kt b/node_modules/@mattermost/react-native-network-client/android/src/main/java/com/mattermost/networkclient/NetworkClient.kt
+index 0a40e4b..a829fd7 100644
+--- a/node_modules/@mattermost/react-native-network-client/android/src/main/java/com/mattermost/networkclient/NetworkClient.kt
++++ b/node_modules/@mattermost/react-native-network-client/android/src/main/java/com/mattermost/networkclient/NetworkClient.kt
+@@ -664,7 +664,7 @@ internal class NetworkClient(private val context: Context, private val baseUrl:
+             clientCertKeyStore?.first,
+             clientCertKeyStore?.second
+         )
+-        val trustManager = getTrustManager(TrustManagerHelper.buildTrustManager())
++        val trustManager = getTrustManager(TrustManagerHelper.buildTrustManager(context))
+         val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
+         sslContext.init(keyManagers, arrayOf(trustManager), java.security.SecureRandom())
+         return Pair(sslContext.socketFactory, trustManager)
+diff --git a/node_modules/@mattermost/react-native-network-client/android/src/main/java/com/mattermost/networkclient/helpers/TrustManagerHelper.kt b/node_modules/@mattermost/react-native-network-client/android/src/main/java/com/mattermost/networkclient/helpers/TrustManagerHelper.kt
+index ac3cd63..d3edf2e 100644
+--- a/node_modules/@mattermost/react-native-network-client/android/src/main/java/com/mattermost/networkclient/helpers/TrustManagerHelper.kt
++++ b/node_modules/@mattermost/react-native-network-client/android/src/main/java/com/mattermost/networkclient/helpers/TrustManagerHelper.kt
+@@ -1,7 +1,11 @@
+ package com.mattermost.networkclient.helpers
+ 
++import android.content.Context
+ import android.os.Build
+ import java.security.KeyStore
++import java.security.cert.CertificateException
++import java.security.cert.CertificateFactory
++import java.security.cert.X509Certificate
+ import javax.net.ssl.KeyManager
+ import javax.net.ssl.KeyManagerFactory
+ import javax.net.ssl.TrustManagerFactory
+@@ -9,12 +13,20 @@ import javax.net.ssl.X509TrustManager
+ 
+ object TrustManagerHelper {
+ 
++    // Directory (relative to the app's assets) whose certificates are trusted in addition
++    // to the system/user CA store. Populated by the host app.
++    private const val BUNDLED_TRUST_ANCHORS_PATH = "trusted-cas"
++
+     /**
+      * Builds an X509TrustManager that trusts both system and user-installed root CAs (#9337).
+      * AndroidCAStore on API 24+ includes certificates installed via Settings → Security →
+      * Install certificate (e.g. corporate CAs deployed by MDM).
++     *
++     * AndroidCAStore does *not* expose the app's Network Security Config trust anchors, so
++     * when a Context is supplied any certificate bundled under assets/trusted-cas is trusted
++     * as well. This lets the app anchor a private/enterprise root without a system install.
+      */
+-    fun buildTrustManager(): X509TrustManager {
++    fun buildTrustManager(context: Context? = null): X509TrustManager {
+         val trustManagerFactory = TrustManagerFactory.getInstance(
+             TrustManagerFactory.getDefaultAlgorithm()
+         )
+@@ -27,6 +39,47 @@ object TrustManagerHelper {
+         }
+         trustManagerFactory.init(keyStore)
+ 
++        val systemTrustManager = trustManagerFactory.trustManagers
++            .filterIsInstance<X509TrustManager>()
++            .first()
++
++        val bundledTrustManager = context?.let { buildBundledTrustManager(it) }
++            ?: return systemTrustManager
++
++        return CompositeTrustManager(listOf(systemTrustManager, bundledTrustManager))
++    }
++
++    /**
++     * Builds a trust manager whose only anchors are the certificates found under
++     * assets/[BUNDLED_TRUST_ANCHORS_PATH], or null when none are present.
++     */
++    private fun buildBundledTrustManager(context: Context): X509TrustManager? {
++        val certFiles = context.assets
++            .list(BUNDLED_TRUST_ANCHORS_PATH)
++            ?.filter { it.endsWith(".pem") || it.endsWith(".crt") || it.endsWith(".cer") }
++            ?: return null
++        if (certFiles.isEmpty()) return null
++
++        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null) }
++        var added = 0
++        for (fileName in certFiles) {
++            try {
++                context.assets.open("$BUNDLED_TRUST_ANCHORS_PATH/$fileName").use { input ->
++                    val certificate = CertificateFactory.getInstance("X.509")
++                        .generateCertificate(input) as X509Certificate
++                    keyStore.setCertificateEntry("bundled-ca-$added", certificate)
++                    added++
++                }
++            } catch (_: Exception) {
++                // Skip certificates that cannot be parsed.
++            }
++        }
++        if (added == 0) return null
++
++        val trustManagerFactory = TrustManagerFactory.getInstance(
++            TrustManagerFactory.getDefaultAlgorithm()
++        )
++        trustManagerFactory.init(keyStore)
+         return trustManagerFactory.trustManagers
+             .filterIsInstance<X509TrustManager>()
+             .first()
+@@ -46,3 +99,43 @@ object TrustManagerHelper {
+         return kmf.keyManagers
+     }
+ }
++
++/**
++ * An X509TrustManager that accepts a chain if any of its delegates accepts it.
++ */
++class CompositeTrustManager(
++    private val trustManagers: List<X509TrustManager>
++) : X509TrustManager {
++
++    @Throws(CertificateException::class)
++    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
++        var lastException: CertificateException? = null
++        for (trustManager in trustManagers) {
++            try {
++                trustManager.checkClientTrusted(chain, authType)
++                return
++            } catch (e: CertificateException) {
++                lastException = e
++            }
++        }
++        throw lastException ?: CertificateException("No trust manager accepted the client certificate")
++    }
++
++    @Throws(CertificateException::class)
++    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
++        var lastException: CertificateException? = null
++        for (trustManager in trustManagers) {
++            try {
++                trustManager.checkServerTrusted(chain, authType)
++                return
++            } catch (e: CertificateException) {
++                lastException = e
++            }
++        }
++        throw lastException ?: CertificateException("No trust manager accepted the server certificate")
++    }
++
++    override fun getAcceptedIssuers(): Array<X509Certificate> {
++        return trustManagers.flatMap { it.acceptedIssuers.toList() }.toTypedArray()
++    }
++}
