@@ -1,0 +1,100 @@
+---
+name: build-android-universal
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "android/app/src/main/res/raw/**"
+      - "android/app/src/main/res/xml/network_security_config.xml"
+      - ".github/workflows/build-android-universal.yml"
+
+concurrency:
+  group: build-android-universal-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TERM: xterm
+  NODE_OPTIONS: --max-old-space-size=8192
+  ORG_GRADLE_PROJECT_jvmargs: -Xmx6g -XX:+HeapDumpOnOutOfMemoryError
+
+jobs:
+  build-android-universal:
+    name: Universal APK (armv7 + armv8)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: ci/checkout-repo
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: ci/prepare-node-deps
+        uses: ./.github/actions/prepare-node-deps
+
+      - name: ci/setup-java
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5.3.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: ci/jetify-android-libraries
+        shell: bash
+        run: ./node_modules/.bin/jetify
+
+      - name: ci/copy-sound-assets
+        shell: bash
+        run: |
+          mkdir -p android/app/src/main/res/raw
+          cp assets/sounds/* android/app/src/main/res/raw/
+
+      - name: ci/free-disk-space
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune --all --force || true
+
+      - name: ci/accept-android-sdk-licenses
+        shell: bash
+        run: |
+          SDKMGR="$(command -v sdkmanager || echo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager")"
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+
+      - name: ci/cache-gradle-dependencies
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: /home/runner/.gradle/caches/modules-2/
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: ci/build-universal-release-apk
+        shell: bash
+        working-directory: ./android
+        run: |
+          ./gradlew :app:assembleRelease --no-daemon \
+            -PseparateApk=true \
+            -PuniversalApk=true \
+            -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
+
+      - name: ci/verify-bundled-ca
+        shell: bash
+        working-directory: ./android/app/build/outputs/apk/release
+        run: |
+          ls -lh
+          echo "::group::bundled certificate check"
+          unzip -l app-universal-release.apk | grep -i "russian_trusted_root_ca" || (echo "CA not found in APK" && exit 1)
+          echo "::endgroup::"
+          sha256sum app-universal-release.apk
+
+      - name: ci/upload-universal-apk
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mattermost-android-universal-${{ github.run_number }}
+          path: |
+            android/app/build/outputs/apk/release/app-universal-release.apk
+            android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
+            android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
+          if-no-files-found: error
