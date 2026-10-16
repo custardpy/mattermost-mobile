@@ -125,6 +125,8 @@ libraries/**/**/.build
 # Android sounds
 android/app/src/main/res/raw/*
 !android/app/src/main/res/raw/russian_trusted_root_ca.pem
+!android/app/src/main/res/raw/res_ca.pem
+!android/app/src/main/res/raw/rpc_almaz_root.pem
 .aider*
 
 # Intune submodule (private repository - internal builds only)
