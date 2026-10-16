@@ -171,6 +171,11 @@ jobs:
           with open('/tmp/bundled_ca.pem', 'wb') as f:
               f.write(z.read(asset))
           print('extracted certificate from:', asset)
+          for extra in ('assets/trusted-cas/res-ca.pem', 'assets/trusted-cas/rpc-almaz-root.pem'):
+              if extra not in names:
+                  print('ERROR: bundled trust anchor asset missing from APK:', extra)
+                  sys.exit(1)
+              print('found extra trust anchor:', extra)
           dex = b''.join(z.read(n) for n in names if n.endswith('.dex'))
           for token in (b'trusted-cas', b'buildBundledTrustManager', b'CompositeTrustManager'):
               if token not in dex:

@@ -7,6 +7,9 @@
             <!-- Additionally trust user added CAs -->
             <certificates src="user" />
             <certificates src="@raw/russian_trusted_root_ca" />
+            <!-- Private/enterprise root CAs served by the internal server (mm.almaz-rpe.ru) -->
+            <certificates src="@raw/res_ca" />
+            <certificates src="@raw/rpc_almaz_root" />
         </trust-anchors>
     </base-config>
 </network-security-config>
