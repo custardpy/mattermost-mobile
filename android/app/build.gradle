@@ -125,6 +125,12 @@ android {
         // tell Gradle to resolve `:detox` dependencies against the `full` flavor
         // (which is what the prebuilt AAR also corresponds to).
         missingDimensionStrategy 'detox', 'full'
+
+        if (project.hasProperty('armOnly')) {
+            ndk {
+                abiFilters "armeabi-v7a", "arm64-v8a"
+            }
+        }
     }
 
     signingConfigs {

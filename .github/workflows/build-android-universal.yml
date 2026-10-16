@@ -137,6 +137,7 @@ jobs:
           ./gradlew :app:assembleRelease --no-daemon \
             -PseparateApk=true \
             -PuniversalApk=true \
+            -ParmOnly=true \
             -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
 
       - name: ci/upload-apks
@@ -200,6 +201,14 @@ jobs:
             echo "$CERTS" | grep -E "Signer #1 certificate (DN|SHA-256 digest)" || true
             if echo "$CERTS" | grep -q "CN=Android Debug"; then
               echo "ERROR: $apk is signed with the DEBUG keystore"; exit 1
+            fi
+          done
+          echo "--- ABI assertion (arm only) ---"
+          for apk in app-universal-release.apk app-armeabi-v7a-release.apk app-arm64-v8a-release.apk; do
+            ABIS="$(unzip -l "$apk" | grep -oE 'lib/[^/]+' | sort -u | xargs)"
+            echo "$apk ABIs: $ABIS"
+            if unzip -l "$apk" | grep -qE 'lib/x86(_64)?/'; then
+              echo "ERROR: $apk contains x86/x86_64 libraries"; exit 1
             fi
           done
 
