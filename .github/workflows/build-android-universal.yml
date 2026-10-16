@@ -107,6 +107,29 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
+      - name: ci/configure-release-signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "ERROR: ANDROID_KEYSTORE_BASE64 secret is not set"; exit 1
+          fi
+          if [ -z "${ANDROID_KEY_ALIAS:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ]; then
+            echo "ERROR: ANDROID_KEY_ALIAS / ANDROID_KEYSTORE_PASSWORD secret is not set"; exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+          {
+            echo ""
+            echo "MATTERMOST_RELEASE_STORE_FILE=release.keystore"
+            echo "MATTERMOST_RELEASE_KEY_ALIAS=${ANDROID_KEY_ALIAS}"
+            echo "MATTERMOST_RELEASE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}"
+          } >> android/gradle.properties
+          echo "Release signing configured from secrets."
+
       - name: ci/build-universal-release-apk
         shell: bash
         working-directory: ./android
@@ -164,6 +187,22 @@ jobs:
           echo "Bundled CA fingerprint verified: $ACTUAL"
           sha256sum app-universal-release.apk
 
+      - name: ci/verify-apk-signing
+        shell: bash
+        working-directory: ./android/app/build/outputs/apk/release
+        run: |
+          set -euo pipefail
+          APKSIGNER="$(ls "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$APKSIGNER" ]; then echo "ERROR: apksigner not found"; exit 1; fi
+          for apk in app-universal-release.apk app-armeabi-v7a-release.apk app-arm64-v8a-release.apk; do
+            echo "--- $apk ---"
+            CERTS="$("$APKSIGNER" verify --print-certs "$apk")"
+            echo "$CERTS" | grep -E "Signer #1 certificate (DN|SHA-256 digest)" || true
+            if echo "$CERTS" | grep -q "CN=Android Debug"; then
+              echo "ERROR: $apk is signed with the DEBUG keystore"; exit 1
+            fi
+          done
+
       - name: ci/compute-release-tag
         id: tag
         shell: bash
@@ -193,7 +232,7 @@ jobs:
 
           Bundles the Russian Trusted Root CA and patches @mattermost/react-native-network-client so the native trust manager additionally trusts certificates under assets/trusted-cas — no system/user CA install required.
 
-          Signed with the debug keystore; uninstall any differently-signed build first." \
+          Signed with the project release key. Uninstall any differently-signed build (e.g. the official app or the earlier debug-signed builds) first." \
             android/app/build/outputs/apk/release/app-universal-release.apk \
             android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk \
             android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
